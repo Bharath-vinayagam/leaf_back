@@ -1,0 +1,21 @@
+# Ignore everything by default
+*
+
+# Allow Git config files
+!.gitignore
+
+# Allow code files
+!*.py
+!*.md
+!*.txt
+!requirements.txt
+
+# Allow Streamlit or other app files
+!streamlit_app.py
+!app.py
+
+# Allow only samples
+!samples/
+!samples/*.jpg
+!samples/*.jpeg
+!samples/*.png
