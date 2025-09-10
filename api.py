@@ -8,6 +8,10 @@ import os
 
 app = FastAPI()
 
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Leaf backend is running", "endpoints": ["/predict", "/docs"]}
+
 # -------------------------------
 # Safe model loading
 # -------------------------------
