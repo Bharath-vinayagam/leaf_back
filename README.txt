@@ -187,9 +187,3 @@ CONTACT / ATTRIBUTION
 - Author / Maintainer: Bharath Vinayagam
 - Project Repository: https://github.com/Bharath-vinayagam/leaf_back
 
---------------------------------------------------------------------------------
-CHECKLIST FOR MAINTAINERS
---------------------------------------------------------------------------------
-[x] Replace repository links with actual GitHub URL.
-[x] Verify ONNX model is tracked and pushed to main branch.
-[x] Verify Vercel deployment build configuration.
