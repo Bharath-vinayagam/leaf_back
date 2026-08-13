@@ -1,0 +1,27 @@
+# Ignore everything by default
+*
+
+# Allow Git config files
+!.gitignore
+!vercel.json
+
+# Allow code files
+!*.py
+!*.md
+!*.txt
+!requirements.txt
+!*.keras
+
+# Allow API directory (was ignored due to "*")
+!api/
+!api/**
+
+# Allow Streamlit or other app files
+!streamlit_app.py
+!app.py
+
+# Allow only samples
+!samples/
+!samples/*.jpg
+!samples/*.jpeg
+!samples/*.png
