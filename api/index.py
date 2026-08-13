@@ -1,175 +1,32 @@
 from fastapi import FastAPI, File, UploadFile
 import numpy as np
-import tensorflow as tf
+import onnxruntime as ort
 from PIL import Image
 import io
 import os
 
-# Create FastAPI app instance that Vercel will import
 app = FastAPI()
-
 
 @app.get("/")
 def read_root():
     return {
         "status": "ok",
-        "message": "Leaf backend is running",
+        "message": "Leaf backend is running on Vercel (ONNX engine)",
         "endpoints": ["/predict", "/detect-leaf", "/docs"],
     }
 
-
-# -------------------------------
-# Safe model loading (copied from root api.py with minor path tweaks)
-# -------------------------------
 def _model_path() -> str:
-    # Resolve relative to this file so it works on Vercel
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidate = os.path.join(base_dir, "final_leaf_disease_model.keras")
+    candidate = os.path.join(base_dir, "final_leaf_disease_model.onnx")
     return candidate
 
-
-def load_model_safely():
-    model_path = _model_path()
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file {model_path} not found")
-
-    try:
-        model = tf.keras.models.load_model(model_path, compile=False)
-        print("Model loaded successfully with compile=False")
-        return model
-    except Exception as e1:
-        print(f"First loading attempt failed: {e1}")
-        try:
-            model = tf.keras.models.load_model(model_path, compile=False, custom_objects={})
-            print("Model loaded successfully with custom_objects")
-            return model
-        except Exception as e2:
-            print(f"Second loading attempt failed: {e2}")
-            try:
-                model = tf.keras.models.load_model(
-                    model_path,
-                    compile=False,
-                    options=tf.saved_model.LoadOptions(experimental_io_device='/job:localhost'),
-                )
-                print("Model loaded successfully with legacy options")
-                return model
-            except Exception as e3:
-                print(f"Third loading attempt failed: {e3}")
-                try:
-                    model = tf.keras.models.load_model(model_path, compile=False, safe_mode=True)
-                    print("Model loaded successfully with safe_mode=True")
-                    return model
-                except Exception as e4:
-                    print(f"Fourth loading attempt failed: {e4}")
-                    print("Using fallback model - your trained model may have compatibility issues")
-                    return create_fallback_model()
-
-
-def create_fallback_model():
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(224, 224, 3)),
-        tf.keras.layers.Conv2D(32, 3, activation='relu'),
-        tf.keras.layers.MaxPooling2D(),
-        tf.keras.layers.Conv2D(64, 3, activation='relu'),
-        tf.keras.layers.MaxPooling2D(),
-        tf.keras.layers.Conv2D(64, 3, activation='relu'),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dense(38, activation='softmax'),
-    ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    print("Fallback model created successfully")
-    return model
-
-
-def is_leaf_image(image_array):
-    try:
-        hsv = tf.image.rgb_to_hsv(image_array)
-        h = hsv[:, :, 0]
-        s = hsv[:, :, 1]
-        v = hsv[:, :, 2]
-
-        mean_saturation = tf.reduce_mean(s)
-        mean_value = tf.reduce_mean(v)
-
-        green_mask = tf.logical_and(tf.greater(h, 0.2), tf.less(h, 0.4))
-        green_ratio = tf.reduce_mean(tf.cast(green_mask, tf.float32))
-
-        gray = tf.image.rgb_to_grayscale(image_array)
-        texture_variance = tf.math.reduce_variance(gray)
-
-        print(
-            f"Debug - Green ratio: {green_ratio:.3f}, Saturation: {mean_saturation:.3f}, Value: {mean_value:.3f}, Texture: {texture_variance:.5f}"
-        )
-
-        leaf_score = 0
-        if green_ratio > 0.25:
-            leaf_score += 3
-        elif green_ratio > 0.15:
-            leaf_score += 2
-        elif green_ratio > 0.05:
-            leaf_score += 1
-
-        if 0.08 < mean_saturation < 0.95:
-            leaf_score += 2
-        if 0.05 < mean_value < 0.95:
-            leaf_score += 2
-        if texture_variance > 0.005:
-            leaf_score += 2
-        if texture_variance > 0.02:
-            leaf_score += 1
-        if texture_variance > 0.04:
-            leaf_score += 1
-        if green_ratio < 0.03:
-            leaf_score -= 1
-
-        return leaf_score >= 4, leaf_score / 11.0
-    except Exception as e:
-        print(f"Error in leaf detection: {e}")
-        return True, 0.5
-
-
-def advanced_leaf_detection(image_array):
-    try:
-        gray = tf.image.rgb_to_grayscale(image_array)
-        edges_x = tf.abs(gray[:, :, :, 1:] - gray[:, :, :, :-1])
-        edges_y = tf.abs(gray[:, 1:, :, :] - gray[:, :-1, :, :])
-        edge_density = tf.reduce_mean(edges_x) + tf.reduce_mean(edges_y)
-
-        height, width = 224, 224
-        aspect_ratio = height / width
-
-        non_zero_pixels = tf.reduce_sum(tf.cast(tf.greater(gray, 0.1), tf.float32))
-        coverage_ratio = non_zero_pixels / (224 * 224)
-
-        texture_variance = tf.math.reduce_variance(gray)
-
-        score = 0
-        if edge_density > 0.015:
-            score += 2
-        if 0.25 < aspect_ratio < 4.0:
-            score += 1
-        if coverage_ratio > 0.15:
-            score += 2
-        if texture_variance > 0.02:
-            score += 1
-        if texture_variance > 0.04:
-            score += 1
-
-        return score >= 2, score / 7.0
-    except Exception as e:
-        print(f"Error in advanced leaf detection: {e}")
-        return True, 0.5
-
-
-# Load model once at import time (cold start)
-try:
-    disease_model = load_model_safely()
-    print("✅ Disease classification model ready")
-except Exception as e:
-    print(f"❌ Error loading disease model: {e}")
-    disease_model = create_fallback_model()
-
+model_path = _model_path()
+if os.path.exists(model_path):
+    session = ort.InferenceSession(model_path)
+    input_name = session.get_inputs()[0].name
+    print("✅ ONNX model loaded successfully")
+else:
+    raise FileNotFoundError(f"Model file {model_path} not found")
 
 class_names = [
     'Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy',
@@ -186,6 +43,80 @@ class_names = [
     'Tomato___Tomato_Yellow_Leaf_Curl_Virus', 'Tomato___Tomato_mosaic_virus', 'Tomato___healthy',
 ]
 
+def is_leaf_image(image_array):
+    try:
+        img = image_array[0] if len(image_array.shape) == 4 else image_array
+        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+
+        max_c = np.maximum(np.maximum(r, g), b)
+        min_c = np.minimum(np.minimum(r, g), b)
+        delta = max_c - min_c + 1e-7
+
+        h = np.zeros_like(r)
+        mask_g = (max_c == g)
+        mask_r = (max_c == r)
+        mask_b = (max_c == b)
+
+        h[mask_g] = (b[mask_g] - r[mask_g]) / delta[mask_g] + 2.0
+        h[mask_r] = ((g[mask_r] - b[mask_r]) / delta[mask_r]) % 6.0
+        h[mask_b] = (r[mask_b] - g[mask_b]) / delta[mask_b] + 4.0
+        h = h / 6.0
+
+        s = np.where(max_c == 0, 0, delta / (max_c + 1e-7))
+        v = max_c
+
+        mean_saturation = np.mean(s)
+        mean_value = np.mean(v)
+
+        green_mask = (h > 0.2) & (h < 0.4)
+        green_ratio = np.mean(green_mask)
+
+        gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
+        texture_variance = np.var(gray)
+
+        leaf_score = 0
+        if green_ratio > 0.25: leaf_score += 3
+        elif green_ratio > 0.15: leaf_score += 2
+        elif green_ratio > 0.05: leaf_score += 1
+
+        if 0.08 < mean_saturation < 0.95: leaf_score += 2
+        if 0.05 < mean_value < 0.95: leaf_score += 2
+        if texture_variance > 0.005: leaf_score += 2
+        if texture_variance > 0.02: leaf_score += 1
+        if texture_variance > 0.04: leaf_score += 1
+        if green_ratio < 0.03: leaf_score -= 1
+
+        return leaf_score >= 4, leaf_score / 11.0
+    except Exception as e:
+        print(f"Error in leaf detection: {e}")
+        return True, 0.5
+
+def advanced_leaf_detection(image_array):
+    try:
+        img = image_array[0] if len(image_array.shape) == 4 else image_array
+        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+        gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
+
+        edges_x = np.abs(gray[:, 1:] - gray[:, :-1])
+        edges_y = np.abs(gray[1:, :] - gray[:-1, :])
+        edge_density = np.mean(edges_x) + np.mean(edges_y)
+
+        aspect_ratio = 1.0
+        non_zero_pixels = np.sum(gray > 0.1)
+        coverage_ratio = non_zero_pixels / (224 * 224)
+        texture_variance = np.var(gray)
+
+        score = 0
+        if edge_density > 0.015: score += 2
+        if 0.25 < aspect_ratio < 4.0: score += 1
+        if coverage_ratio > 0.15: score += 2
+        if texture_variance > 0.02: score += 1
+        if texture_variance > 0.04: score += 1
+
+        return score >= 2, score / 7.0
+    except Exception as e:
+        print(f"Error in advanced leaf detection: {e}")
+        return True, 0.5
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
@@ -194,7 +125,7 @@ async def predict(file: UploadFile = File(...)):
         img = Image.open(io.BytesIO(contents)).convert("RGB")
         img = img.resize((224, 224))
 
-        img_array = np.array(img) / 255.0
+        img_array = np.array(img, dtype=np.float32) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
 
         is_leaf, leaf_confidence = is_leaf_image(img_array)
@@ -207,7 +138,7 @@ async def predict(file: UploadFile = File(...)):
                 "confidence": 0.0,
             }
 
-        preds = disease_model.predict(img_array)
+        preds = session.run(None, {input_name: img_array})[0][0]
         predicted_class = class_names[np.argmax(preds)]
         confidence = float(np.max(preds))
 
@@ -221,7 +152,6 @@ async def predict(file: UploadFile = File(...)):
     except Exception as e:
         return {"error": str(e)}
 
-
 @app.post("/detect-leaf")
 async def detect_leaf_only(file: UploadFile = File(...)):
     try:
@@ -229,7 +159,7 @@ async def detect_leaf_only(file: UploadFile = File(...)):
         img = Image.open(io.BytesIO(contents)).convert("RGB")
         img = img.resize((224, 224))
 
-        img_array = np.array(img) / 255.0
+        img_array = np.array(img, dtype=np.float32) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
 
         is_leaf_basic, confidence_basic = is_leaf_image(img_array)
@@ -247,5 +177,3 @@ async def detect_leaf_only(file: UploadFile = File(...)):
         }
     except Exception as e:
         return {"error": str(e)}
-
-
