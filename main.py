@@ -1,10 +1,20 @@
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import tensorflow as tf
 from PIL import Image
 import io
 
 app = FastAPI()
+
+# 🔑 Enable CORS Middleware (Allows Chrome, Web Browsers & Mobile Apps to connect)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Load your trained model
 model = tf.keras.models.load_model("final_leaf_disease_model.keras")
@@ -32,6 +42,10 @@ class_names = [
     'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
     'Tomato___Tomato_mosaic_virus', 'Tomato___healthy'
 ]
+
+@app.get("/")
+def home():
+    return {"status": "ok", "message": "Leaf Disease Detection API is running"}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
